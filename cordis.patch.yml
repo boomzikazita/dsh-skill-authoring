@@ -1,0 +1,6 @@
+# dsh-skill-authoring bundle patch — skill 创建 9 项门禁执行器
+# 挂载：把 dsh-skill-authoring 加入 profile 的 dsh.profile.bundles
+- insert:
+    - id: skill-authoring
+      name: 'dsh-skill-authoring'
+      config: {}
