@@ -2,7 +2,7 @@
  * dsh-skill-authoring — DSH skill 创建与审计插件（vibe-coding-cn 9 项质量门禁）
  *
  * 准则来源：vibe-coding-cn（https://github.com/2025Emma/vibe-coding-cn）→
- *           legacy system skill-authoring（legacy system 侧元 skill）→ 本插件（DSH 执行器）
+ *           hermes-agent-skill-authoring（hermes 侧元 skill）→ 本插件（DSH 执行器）
  *
  * 原则：所有 skill 创建/修改必须经过 9 项门禁。文档给标准（skill 版），本插件给执行。
  *

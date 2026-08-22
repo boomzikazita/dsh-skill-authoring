@@ -1,24 +1,11 @@
 {
   "name": "dsh-skill-authoring",
+  "private": true,
   "version": "0.1.0",
   "type": "module",
   "main": "index.js",
-  "license": "MIT",
-  "author": "boomzikazita",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/boomzikazita/dsh-skill-authoring.git"
-  },
-  "keywords": [
-    "dsh",
-    "dsh-plugin",
-    "deepseek-harness",
-    "skill",
-    "authoring",
-    "quality-gate"
-  ],
-  "peerDependencies": {
-    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6"
+  "dependencies": {
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6"
   },
   "dsh": {
     "bundle": {

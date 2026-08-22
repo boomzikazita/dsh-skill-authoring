@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""skill_gate.py — DSH skill 9 项质量门禁引擎（源自 vibe-coding-cn / legacy system skill-authoring）
+"""skill_gate.py — DSH skill 9 项质量门禁引擎（源自 vibe-coding-cn / hermes-agent-skill-authoring）
 
 用法:
   skill_gate.py audit <SKILL.md 路径>        # 按 9 项门禁逐条判定，输出审计表
@@ -48,6 +48,12 @@ def audit_skill(path: str) -> dict:
     desc_ok = bool(desc) and len(desc) <= 1024 and len(desc) >= 20
     checks.append(_c("description", desc_ok,
         f"≤1024 含 what+when（{len(desc)} 字符）" if desc_ok else f"description 缺失/过短/过长（{len(desc)} 字符）"))
+    # 2.5 目录预算提示（2026-08-21，借鉴 OpenClaw skills：单技能 ≈24 tokens/97 字符，
+    #      技能目录每次会话全量注入提示词）。非阻断：只提示，不判失败。
+    #      建议：描述把"触发关键词 + 一句话 what"前置到 ~160 字符内，长说明放正文。
+    budget_detail = (f"目录预算提示：description {len(desc)} 字符（≈{max(1, len(desc)//4)} tokens）。"
+                     ">160 字符时建议将触发关键词与 what 前置到前 160 字符，长说明移正文（技能目录每会话全量注入）")
+    checks.append(_c("desc 目录预算", True, budget_detail))
 
     # 3. whenToUse 触发条件 ≥3（DSH 用 whenToUse；兼容 triggers）
     when = fm.get("whenToUse", "") or fm.get("triggers", "")
