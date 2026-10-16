@@ -1,6 +1,13 @@
 /**
  * dsh-skill-authoring — DSH skill 创建与审计插件（vibe-coding-cn 9 项质量门禁）
  *
+ * v0.2.1（2026-10-15）：
+ *   1. 门禁告警注入恒失效（@deepseek-ai/dsh-llm 不可解析 + 失败静默丢）→ 等价兜底工厂 + 回队 + 留痕
+ *   2. 写入门禁作用域改「DSH 实际装载的 skills 根」（原硬编码 ~/.dsh/skills，本机为空 ⇒ 门禁从不触发），
+ *      相对路径按会话 cwd 归一
+ *   3. skill_audit：裸名先经 ctx.skills.list() 解析真实路径（原调用必失败）；输出按描述渲染 ✓/✗ 表
+ *   4. DOMAIN_MAP 补 hithink-finance-*（与 dsh-skill-search 同步，避免 'CLI' 抢域）
+ *
  * v0.2.0（2026-10-14，dsh 0.2 适配 + skill_mece_check 迁入）：
  *   1. 删除 `export const Config = null`（Config 不导出才安全，null 会崩设置页）
  *   2. 写入门禁钩子读参改 exec.arguments ?? exec.args 双读（铁律 F；不修则门禁静默失效）
@@ -26,7 +33,9 @@
  *                      自动跑门禁预检，不合格返回警告（不拦截，提示先补全）
  */
 import { execFileSync } from 'node:child_process'
-import { join, dirname } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { join, dirname, resolve, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -38,6 +47,47 @@ const HOME = homedir()
 // 铁律 F：fileURLToPath 解析插件自身路径（new URL().pathname 裸取在 Windows 产非法路径）
 const SCRIPTS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'scripts')
 const SKILLS_DIR = join(HOME, '.dsh', 'skills')
+
+// v0.2.1：技能路径归一。`SkillSummary.path` 可能是**相对路径**（本机实测
+// `.agents/skills/<名>/SKILL.md`，基准是宿主进程 cwd / 家目录，不是会话工作区），
+// 因此按「会话 cwd → 宿主 cwd → HOME」逐个试，取第一个真实存在的绝对路径；
+// 全都不存在时回落会话 cwd（保持可诊断），并展开 `~`。
+function absSkillPath(p, cwd) {
+  if (typeof p !== 'string' || !p) return null
+  const raw = p.replace(/^~(?=\/|$)/, HOME)
+  if (isAbsolute(raw)) return raw
+  for (const base of [cwd, process.cwd(), HOME]) {
+    if (!base) continue
+    const abs = resolve(base, raw)
+    if (existsSync(abs)) return abs
+  }
+  return resolve(cwd || process.cwd(), raw)
+}
+
+// ---------- 注入消息工厂（v0.2.1）----------
+// 优先宿主 @deepseek-ai/dsh-llm 的 createUserMessage；该裸导入在插件真实目录下可能解析不到
+// （本机实测 ERR_MODULE_NOT_FOUND），原实现静默吞掉 ⇒ 门禁告警永远到不了模型。
+let _createUserMessage = null // null=未探测 / function=宿主工厂 / false=不可用
+let _injectFactoryWarned = false
+async function makeInjectedUserMessage({ text, kind }) {
+  const content = [{ type: 'text', text }]
+  if (_createUserMessage === null) {
+    try {
+      const mod = await import('@deepseek-ai/dsh-llm')
+      _createUserMessage = typeof mod?.createUserMessage === 'function' ? mod.createUserMessage : false
+    } catch {
+      _createUserMessage = false
+    }
+  }
+  if (typeof _createUserMessage === 'function') {
+    return _createUserMessage({ content, source: { kind } })
+  }
+  if (!_injectFactoryWarned) {
+    _injectFactoryWarned = true
+    console.warn('[dsh-skill-authoring] @deepseek-ai/dsh-llm 不可解析，注入消息走等价兜底形态（建议补 node_modules/@deepseek-ai/dsh-llm 软链）')
+  }
+  return Object.freeze({ id: randomUUID(), role: 'user', content, source: { kind } })
+}
 
 // ---------- MECE 支撑（v0.2.0 自 dsh-skill-lazy 迁入，供 skill_mece_check） ----------
 // name → 领域 id 精确映射（67 个存量 skill 全量归类；新增未映射 skill 走关键词兜底 → other）
@@ -96,7 +146,6 @@ const DOMAIN_MAP = {
   'maozedong-perspective': 'thinking',
   'mckinsey-content-editor': 'thinking',
   'policy-analysis-expert': 'thinking',
-  'ponytail': 'thinking',
   'stepwise-execution': 'thinking',
   'linux-service-longevity': 'ops',
   'vaultwarden-selfhosted': 'ops',
@@ -109,10 +158,47 @@ const DOMAIN_MAP = {
   'financial-report-deep-analysis': 'research',
   'technical-counter-examples': 'research',
   'hermes-agent-skill-authoring': 'skill-eng',
+  // v0.2.1：与 dsh-skill-search 同步——现役 hithink-finance-* 技能（10 个）归类，
+  // 原表停留在 8 月的 67 技能快照，新技能走关键词兜底时会被 dev 的 'CLI' 抢走。
+  'hithink-finance-market': 'a-share',
+  'hithink-finance-financials': 'a-share',
+  'hithink-finance-fund': 'a-share',
+  'hithink-finance-index': 'a-share',
+  'hithink-finance-shared': 'a-share',
+  'hithink-finance-special-data': 'a-share',
+  'hithink-finance-data': 'a-share',
+  'hithink-finance-valuation': 'a-share',
+  'hithink-finance-research': 'a-share',
+  'hithink-finance-symbol': 'a-share',
+  // v0.2.2：迁移审计补表——原 21 条未映射 skill 全落「其他」，逐一归位；ponytail 族从 thinking 改归 dev（编码工具）
+  'access-governance': 'ops',
+  'async-result-verification': 'dev',
+  'baseline-diff-monitoring': 'ops',
+  'blocked-page-recovery': 'research',
+  'competitor-news-monitor': 'research',
+  'junshi': 'thinking',
+  'linux-machine-cleanup': 'ops',
+  'merge-reconciler': 'github',
+  'ponytail': 'dev',
+  'ponytail-debt': 'dev',
+  'ponytail-help': 'dev',
+  'ponytail-review': 'dev',
+  'reddit-reading': 'research',
+  'remote-desktop-access': 'ops',
+  'requesting-code-review': 'dev',
+  'rss-feeds': 'research',
+  'sdlc-review': 'dev',
+  'simplify-code': 'dev',
+  'spike': 'dev',
+  'test-driven-development': 'dev',
+  'vault-fragment-lookup': 'memory-kb',
+  'weekly-review-planning': 'memory-kb',
+  'hermes-agent-skill-authoring': 'skill-eng',
+  'dsh-operations': 'dsh-platform',
 }
 
 const DOMAINS = [
-  { id: 'a-share', label: 'A股投资', keywords: ['A股', '股票', '行情', '复盘', '北向', '涨停', 'market', 'stock'] },
+  { id: 'a-share', label: 'A股投资', keywords: ['A股', 'a 股', '股票', '行情', '复盘', '北向', '涨停', 'market', 'stock'] },
   { id: 'gov-doc', label: '政务公文', keywords: ['公文', '请示', '通知', '报告', '纪要', '汇报', '讲话', 'gongwen', 'official'] },
   { id: 'office-doc', label: '办公文档', keywords: ['Word', 'Excel', 'PPT', 'PDF', 'docx', 'xlsx', 'pptx', '排版', '文档', 'OCR', '扫描', '提取文字'] },
   { id: 'dev', label: '代码开发', keywords: ['调试', 'debug', '代码', 'CLI', 'harness', 'patch', '编译', 'git'] },
@@ -130,10 +216,12 @@ const DOMAINS = [
 
 /** 描述 → 关键词集合（英文单词 + 中文连续串，去停用词） */
 const STOP_WORDS = new Set(['the','a','an','and','or','of','to','in','for','with','on','as','by','from','use','using','when','what','how','this','that','is','are','be','do','does','can','will','should','document','file','create','make','your','you','user','skill','skills','输出','输入','用于','使用','场景','用户','文档','文件','进行','以及','或者','如果','需要'])
+const CN_STOP_WORDS = new Set(['市场','数据','股票','基金','指数','行情','用户','查询','管理','通过','需要','使用','系统','工具','文件','文档','进行','可以','相关'])
 function keywordsOf(text) {
   const t = String(text || '')
   const en = (t.toLowerCase().match(/[a-z][a-z0-9-]{2,}/g) || []).filter((w) => !STOP_WORDS.has(w))
-  const cn = (t.match(/[一-龥]{2,4}/g) || [])
+  // CJK：整段连续汉字取为词（2~12 字），不定宽切碎——原 {2,4} 会把「数据分析师」切成「数据/分析师」断词
+  const cn = (t.match(/[一-龥]{2,12}/g) || []).filter((w) => !CN_STOP_WORDS.has(w))
   return [...new Set([...en, ...cn])]
 }
 
@@ -176,6 +264,7 @@ function overlapCheck(newName, newDesc, allSkills) {
   if (newKw.length === 0) return []
   const scored = []
   for (const s of allSkills) {
+    if (s.name === newName) continue // v0.2.2：自我匹配剔除（原实现把自己的 100% 塞进重叠榜，淹掉真信号）
     const base = keywordsOf(`${s.name} ${s.description}`)
     const shared = newKw.filter((k) => base.includes(k))
     if (shared.length === 0) continue
@@ -230,17 +319,44 @@ export function apply(ctx, config = {}) {
     name: 'skill_audit',
     description: '按 vibe-coding-cn 9 项质量门禁审计 SKILL.md：name/description/whenToUse/Boundaries/QuickRef/Examples/references/验证路径/操作手册风格，逐条输出 ✓/✗。创建或修改 skill 后必须运行自检。',
     parameters: {
-      path: { type: 'string', required: true, description: 'SKILL.md 路径或 skill 名（自动定位 ~/.dsh/skills/<name>/SKILL.md）' },
+      path: { type: 'string', required: true, description: 'SKILL.md 路径或 skill 名（先经 ctx.skills.list() 解析真实路径，回落 ~/.dsh/skills/<name>/SKILL.md）' },
     },
     output: {
       schema: { type: 'string' },
       render: (args, value) => [{ type: 'text', text: value }],
     },
-    async execute(input) {
-      let p = input.path
-      if (!p.includes('/') && !p.endsWith('.md')) p = join(SKILLS_DIR, p, 'SKILL.md')
+    async execute(input, exec) {
+      const raw = String(input?.path || '')
+      let p = raw
+      if (raw && !raw.includes('/') && !raw.includes('\\') && !raw.endsWith('.md')) {
+        // v0.2.1：裸名先走 ctx.skills.list() 拿真实路径——本机 ~/.dsh/skills 为空（现役技能
+        // 由外部 CLI 装在别处），原实现直接拼 SKILLS_DIR 必然返回"文件不存在"。
+        try {
+          const lookup = {
+            cwd: exec?.agent?.session?.header?.cwd,
+            signal: exec?.signal,
+            scope: exec?.agent,
+          }
+          const all = await ctx.skills.list(lookup)
+          const hit = (all ?? []).find((s) => s?.name === raw && typeof s.path === 'string')
+          // 相对路径（实测 '.agents/skills/<名>/SKILL.md'）归一到宿主可读的绝对路径
+          p = hit ? (absSkillPath(hit.path, lookup.cwd) || hit.path) : join(SKILLS_DIR, raw, 'SKILL.md')
+        } catch {
+          p = join(SKILLS_DIR, raw, 'SKILL.md')
+        }
+      }
       const r = py('skill_gate.py', ['audit', p])
       if (!r.ok) return `[skill_audit] 失败：${r.out}`
+      // v0.2.1：按工具描述承诺渲染 ✓/✗ 表（原样返回 JSON，与描述不符）；解析失败则原样返回。
+      try {
+        const d = JSON.parse(r.out)
+        if (d && Array.isArray(d.checks)) {
+          const passed = d.passed ?? d.checks.filter((c) => c.ok).length
+          const total = d.total ?? d.checks.length
+          const rows = d.checks.map((c) => (c.ok ? `✓ ${c.title}` : `✗ ${c.title}　← ${c.detail ?? ''}`))
+          return [`# skill_audit: ${d.path ?? p} — ${d.ok ? '✅ 通过' : '❌ 未通过'}（${passed}/${total}）`, '', ...rows].join('\n')
+        }
+      } catch { /* 非 JSON：原样返回 */ }
       return r.out
     },
   }))
@@ -344,24 +460,58 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-   // ---------- 钩子：SKILL.md 写入门禁（waterfall 契约：放行 next() / 拦截 {kind:'block'}；警告走 pendingWarns→pre-step 注入）----------
+   // ---------- 钩子：SKILL.md 写入门禁（waterfall 契约：放行 next() / 拦截 {kind:'deny'}；警告走 pendingWarns→pre-step 注入）----------
   const pendingWarns = []
+  // v0.2.1：作用域修正——原实现硬编码只认 `~/.dsh/skills`，而本机该目录为空（现役技能由
+  // 外部 CLI 装到别处）⇒ 门禁永不触发；且相对路径直接拿 `target.includes('/skills/')` 判定会漏。
+  // 现：从 ctx.skills.list() 的 path 反推「DSH 实际装载的 skills 根」，保留 ~/.dsh/skills 兜底，
+  // 相对路径按会话 cwd 归一后再判归属（60s 缓存，避免每次写文件都列目录）。
+  let skillRootsCache = { at: 0, roots: [] }
+  async function skillRoots(exec) {
+    if (Date.now() - skillRootsCache.at < 60_000 && skillRootsCache.roots.length) return skillRootsCache.roots
+    const roots = new Set([SKILLS_DIR])
+    try {
+      const lookup = {
+        cwd: exec?.agent?.session?.header?.cwd,
+        signal: exec?.signal,
+        scope: exec?.agent,
+      }
+      const all = await ctx.skills.list(lookup)
+      for (const s of all ?? []) {
+        if (typeof s?.path !== 'string' || !s.path.endsWith('SKILL.md')) continue
+        const abs = absSkillPath(s.path, lookup.cwd)
+        if (!abs) continue
+        // 入根集两类：SKILL.md 自身目录 + 其**父目录**（= skills 根，本机实测 /home/boom/.agents/skills）。
+        // 只加自身目录的话，"新建一个技能"的写目标不在任何根内 → 门禁对新建场景失效。
+        roots.add(dirname(abs))
+        roots.add(dirname(dirname(abs)))
+      }
+    } catch { /* 技能目录不可用：仅用兜底根 */ }
+    skillRootsCache = { at: Date.now(), roots: [...roots] }
+    return skillRootsCache.roots
+  }
   ctx.on('tools/pre-execute', async (exec, next) => {
     try {
       // v0.2.0：edit 不再跳过（原代码 `if (toolName === 'edit') return next()` 与头注释
       // 「write/edit 目标为 SKILL.md 时过预检」不符）；真实门径是下面的 target 判定
       // 铁律 F：执行参数读 exec.arguments ?? exec.args（rc 系参数字段为 arguments，旧字段 args 兜底）
       const args = exec?.arguments ?? exec?.args ?? {}
-      const target = args.file_path || args.path || ''
-      if (!target.includes('/skills/') || !target.endsWith('SKILL.md')) return next()
-      // 只对 dsh skills 目录生效
-      if (!target.startsWith(join(HOME, '.dsh', 'skills'))) return next()
+      const raw = args.file_path || args.path || ''
+      if (!raw || !String(raw).endsWith('SKILL.md')) return next()
+      const cwd = exec?.agent?.session?.header?.cwd
+      // 与技能根同一归一函数（含 ~ 展开、多基准探测），避免"根是绝对、目标是相对"判不上。
+      const target = absSkillPath(String(raw), cwd) || String(raw)
+      const roots = await skillRoots(exec)
+      if (!roots.some((r) => target.startsWith(r))) return next() // 只对 DSH 装载的 skills 根生效
       const r = py('skill_gate.py', ['audit', target])
       if (r.ok) {
         let data
         try { data = JSON.parse(r.out) } catch { return next() }
-        if (data && data.ok === false) {
-          const fails = (data.checks || []).filter((c) => !c.ok).map((c) => c.title)
+        // v0.2.1：新建场景排除——写了门禁才真正生效后，"目标文件尚不存在"会被 audit 报
+        // ok:false/error（文件不存在），那不是"未达标"，不该告警。
+        if (data?.error || !Array.isArray(data?.checks) || data.checks.length === 0) return next()
+        if (data.ok === false) {
+          const fails = data.checks.filter((c) => !c.ok).map((c) => c.title)
           pendingWarns.push(`[skill-authoring] 该 SKILL.md 未通过 9 项门禁（未达标：${fails.join(' / ')}）。建议运行 skill_audit 补全。`)
         }
       }
@@ -380,13 +530,15 @@ export function apply(ctx, config = {}) {
         if (pendingWarns.length === 0) return decision
         const warns = pendingWarns.splice(0)
         try {
-          const { createUserMessage } = await import('@deepseek-ai/dsh-llm')
-          const msg = createUserMessage({
-            content: [{ type: 'text', text: warns.join('\n') }],
-            source: { kind: 'plugin:dsh-skill-authoring' },
+          const msg = await makeInjectedUserMessage({
+            text: warns.join('\n'),
+            kind: 'plugin:dsh-skill-authoring',
           })
           return { ...decision, messages: [...decision.messages, msg] }
-        } catch {
+        } catch (e) {
+          // v0.2.1：失败回队 + 留痕（原实现静默丢弃，门禁告警因此永远不可见）
+          pendingWarns.unshift(...warns)
+          console.warn(`[dsh-skill-authoring] 门禁告警注入失败（已回队 ${warns.length} 条）: ${String(e?.message || e)}`)
           return decision
         }
       })
