@@ -214,14 +214,17 @@ let DOMAINS = [
   { id: 'other', label: '其他', keywords: [] },
 ]
 
-// 2026-10-25 单源化：域表共享 ~/.dsh/skill-domains.json（fold/search/authoring 三插件同源），内置拷贝仅作回落
-try {
-  const _sd = JSON.parse(readFileSync(join(HOME, '.dsh', 'skill-domains.json'), 'utf8'))
-  if (_sd && typeof _sd.domainMap === 'object' && Array.isArray(_sd.domains)) {
-    DOMAIN_MAP = _sd.domainMap
-    DOMAINS = _sd.domains
-  }
-} catch { /* 无共享表或损坏 → 回落内置 */ }
+// 2026-10-25 单源化·三级读取：~/.dsh/skill-domains.json（本机覆盖）→ 插件目录自带（随 GitHub 仓库分发）→ 内置拷贝（兜底）
+for (const _p of [join(HOME, '.dsh', 'skill-domains.json'), join(dirname(fileURLToPath(import.meta.url)), 'skill-domains.json')]) {
+  try {
+    const _sd = JSON.parse(readFileSync(_p, 'utf8'))
+    if (_sd && typeof _sd.domainMap === 'object' && Array.isArray(_sd.domains)) {
+      DOMAIN_MAP = _sd.domainMap
+      DOMAINS = _sd.domains
+      break
+    }
+  } catch { /* 该级缺失/损坏 → 下一级 */ }
+}
 
 /** 描述 → 关键词集合（英文单词 + 中文连续串，去停用词） */
 const STOP_WORDS = new Set(['the','a','an','and','or','of','to','in','for','with','on','as','by','from','use','using','when','what','how','this','that','is','are','be','do','does','can','will','should','document','file','create','make','your','you','user','skill','skills','输出','输入','用于','使用','场景','用户','文档','文件','进行','以及','或者','如果','需要'])
