@@ -34,7 +34,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join, dirname, resolve, isAbsolute } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -91,7 +91,7 @@ async function makeInjectedUserMessage({ text, kind }) {
 
 // ---------- MECE 支撑（v0.2.0 自 dsh-skill-lazy 迁入，供 skill_mece_check） ----------
 // name → 领域 id 精确映射（67 个存量 skill 全量归类；新增未映射 skill 走关键词兜底 → other）
-const DOMAIN_MAP = {
+let DOMAIN_MAP = {
   'a-share-daily-analyst': 'a-share',
   'a-share-daily-report-pipeline': 'a-share',
   'a-share-market-analyst': 'a-share',
@@ -197,7 +197,7 @@ const DOMAIN_MAP = {
   'dsh-operations': 'dsh-platform',
 }
 
-const DOMAINS = [
+let DOMAINS = [
   { id: 'a-share', label: 'A股投资', keywords: ['A股', 'a 股', '股票', '行情', '复盘', '北向', '涨停', 'market', 'stock'] },
   { id: 'gov-doc', label: '政务公文', keywords: ['公文', '请示', '通知', '报告', '纪要', '汇报', '讲话', 'gongwen', 'official'] },
   { id: 'office-doc', label: '办公文档', keywords: ['Word', 'Excel', 'PPT', 'PDF', 'docx', 'xlsx', 'pptx', '排版', '文档', 'OCR', '扫描', '提取文字'] },
@@ -213,6 +213,15 @@ const DOMAINS = [
   { id: 'skill-eng', label: '技能工程', keywords: ['技能工程', '技能蒸馏', '技能门禁', 'skill_audit', 'skill_scaffold', 'skill 创建', 'skill 蒸馏'] },
   { id: 'other', label: '其他', keywords: [] },
 ]
+
+// 2026-10-25 单源化：域表共享 ~/.dsh/skill-domains.json（fold/search/authoring 三插件同源），内置拷贝仅作回落
+try {
+  const _sd = JSON.parse(readFileSync(join(HOME, '.dsh', 'skill-domains.json'), 'utf8'))
+  if (_sd && typeof _sd.domainMap === 'object' && Array.isArray(_sd.domains)) {
+    DOMAIN_MAP = _sd.domainMap
+    DOMAINS = _sd.domains
+  }
+} catch { /* 无共享表或损坏 → 回落内置 */ }
 
 /** 描述 → 关键词集合（英文单词 + 中文连续串，去停用词） */
 const STOP_WORDS = new Set(['the','a','an','and','or','of','to','in','for','with','on','as','by','from','use','using','when','what','how','this','that','is','are','be','do','does','can','will','should','document','file','create','make','your','you','user','skill','skills','输出','输入','用于','使用','场景','用户','文档','文件','进行','以及','或者','如果','需要'])
